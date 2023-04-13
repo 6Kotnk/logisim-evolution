@@ -121,6 +121,8 @@ public class Simulator {
     private boolean resetRequested = false;
     private boolean complete = false;
     private boolean oops = false;
+    private boolean run_async = false;
+    private boolean continuePropagation = false;
 
     // This last one should be made thread-safe, but it isn't for now.
     private final PropagationPoints stepPoints = new PropagationPoints();
@@ -241,138 +243,187 @@ public class Simulator {
       boolean doProp = false;
       long now = 0;
 
-      synchronized (this) {
-        boolean ready = false;
-        do {
+      if(run_async) {
+        synchronized (this) {
           if (complete) return false;
-
+          doProp = autoPropagating;
           prop = propagator;
-          now = System.nanoTime();
-
           if (resetRequested) {
             resetRequested = false;
-            doReset = true;
-            doProp = autoPropagating;
-            ready = true;
+            try {
+              stepPoints.clear();
+              if (prop != null) prop.reset();
+              sim.fireSimulatorReset(); // TODO: fixme: ack, wrong thread!
+            } catch (Exception err) {
+              oops = true;
+              err.printStackTrace();
+            }
           }
-          if (nudgeRequested) {
-            nudgeRequested = false;
-            doNudge = true;
-            ready = true;
+        }
+        if (doProp) {
+          try {
+            sim.firePropagationStarted(true); // FIXME: ack, wrong thread!
+            final var p = sim.getPropagationListener();
+            final var evt = p == null ? null : new Event(sim, false, false, false);
+            stepPoints.clear();
+            if (prop != null)  prop.propagate(p, evt);
+            //if (prop != null) prop.step(stepPoints);
+          } catch (Exception err) {
+            oops = true;
+            err.printStackTrace();
           }
-          if (manualStepsRequested > 0) {
-            manualStepsRequested--;
-            doTickIfStable = autoTicking;
-            doStep = true;
-            ready = true;
-          }
+          sim.firePropagationCompleted(true, false, true); // FIXME: ack, wrong thread!
+        }
 
-          if (manualTicksRequested > 0) {
-            // variable is decremented below
-            doTick = true;
-            doProp = autoPropagating;
-            doStep = !autoPropagating;
-            ready = true;
-          }
+      }
+      else{
+        synchronized (this) {
+          boolean ready = false;
+          do {
+            if (complete) return false;
 
-          long delta = 0;
-          if (autoTicking && autoPropagating && autoTickNanos > 0) {
-            // see if it is time to do an auto-tick
-            long deadline = lastTick + autoTickNanos;
-            delta = deadline - now;
-            if (delta <= 0) {
-              doTick = true;
-              doProp = true;
+            prop = propagator;
+            now = System.nanoTime();
+
+            if (resetRequested) {
+              resetRequested = false;
+              doReset = true;
+              doProp = autoPropagating;
               ready = true;
             }
-          }
 
-          if (!ready) {
-            try {
-              if (delta > 0) wait(delta / 1000000, (int) (delta % 1000000));
-              else wait();
-            } catch (InterruptedException ignored) {
-              // yes, we swallow the interrupt
+            if (nudgeRequested) {
+              nudgeRequested = false;
+              doNudge = true;
+              ready = true;
             }
+            if (manualStepsRequested > 0) {
+              manualStepsRequested--;
+              continuePropagation = false;
+              doTickIfStable = autoTicking;
+              doStep = true;
+              ready = true;
+            }
+
+            if (manualTicksRequested > 0) {
+              // variable is decremented below
+              doTick = true;
+              doProp = autoPropagating;
+              doStep = !autoPropagating;
+              ready = true;
+            }
+
+            if(!autoPropagating){
+              continuePropagation = false;
+            }
+
+            if(continuePropagation){
+              doNudge = true;
+              ready = true;
+            }
+
+            long delta = 0;
+            if (autoTicking && autoPropagating && autoTickNanos > 0) {
+              // see if it is time to do an auto-tick
+              long deadline = lastTick + autoTickNanos;
+              delta = deadline - now;
+              if (delta <= 0) {
+                doTick = true;
+                doProp = true;
+                ready = true;
+              }
+            }
+
+            if (!ready) {
+              try {
+                if (delta > 0) wait(delta / 1000000, (int) (delta % 1000000));
+                else wait();
+              } catch (InterruptedException ignored) {
+                // yes, we swallow the interrupt
+              }
+            }
+          } while (!ready);
+
+          oops = false;
+        }
+        // DEBUGGING
+        // System.out.printf("%d nudge %s tick %s prop %s step %s\n", cnt++, doNudge, doTick, doProp,
+        // doStep);
+
+        var oops = false;
+        var osc = false;
+        var ticked = false;
+        var stepped = false;
+        var propagated = false;
+        var hasClocks = true;
+
+        if (doReset)
+          try {
+            stepPoints.clear();
+            if (prop != null) prop.reset();
+            sim.fireSimulatorReset(); // TODO: fixme: ack, wrong thread!
+          } catch (Exception err) {
+            oops = true;
+            err.printStackTrace();
           }
-        } while (!ready);
 
-        oops = false;
+        if (doTick || (doTickIfStable && prop != null && !prop.isPending())) {
+          lastTick = now;
+          ticked = true;
+          if (prop != null) hasClocks = prop.toggleClocks();
+        }
+
+        if (doProp || doNudge)
+          try {
+            sim.firePropagationStarted(ticked); // FIXME: ack, wrong thread!
+            propagated = doProp;
+            final var p = sim.getPropagationListener();
+            final var evt = p == null ? null : new Event(sim, false, false, false);
+            int  propIters = 0;
+            stepPoints.clear();
+            if (prop != null) propIters = prop.propagate(p, evt);
+            propagated |= (propIters == 0);
+            continuePropagation = propIters == (prop.asyncPropLimit);
+          } catch (Exception err) {
+            oops = true;
+            err.printStackTrace();
+          }
+
+        if (doStep)
+          try {
+            stepped = true;
+            stepPoints.clear();
+            if (prop != null) prop.step(stepPoints);
+            if (prop == null || !prop.isPending()) propagated = true;
+          } catch (Exception err) {
+            oops = true;
+            err.printStackTrace();
+          }
+
+        osc = prop != null && prop.isOscillating();
+
+        var clockDied = false;
+        synchronized (this) {
+          this.oops = oops;
+          if (osc) {
+            autoPropagating = false;
+            nudgeRequested = false;
+          }
+          if (ticked && manualTicksRequested > 0) manualTicksRequested--;
+          if (autoTicking && !hasClocks) {
+            autoTicking = false;
+            clockDied = true;
+          }
+        }
+
+        // We report nudges, but we report them as no-ops, unless they were
+        // accompanied by a tick, step, or propagate. That allows for a repaint in
+        // some components.
+        if (ticked || stepped || propagated || doNudge)
+          sim.firePropagationCompleted(
+                  ticked, stepped && !propagated, propagated); // FIXME: ack, wrong thread!
+        if (clockDied) sim.fireSimulatorStateChanged(); // FIXME: ack, wrong thread!
       }
-      // DEBUGGING
-      // System.out.printf("%d nudge %s tick %s prop %s step %s\n", cnt++, doNudge, doTick, doProp,
-      // doStep);
-
-      var oops = false;
-      var osc = false;
-      var ticked = false;
-      var stepped = false;
-      var propagated = false;
-      var hasClocks = true;
-
-      if (doReset)
-        try {
-          stepPoints.clear();
-          if (prop != null) prop.reset();
-          sim.fireSimulatorReset(); // TODO: fixme: ack, wrong thread!
-        } catch (Exception err) {
-          oops = true;
-          err.printStackTrace();
-        }
-
-      if (doTick || (doTickIfStable && prop != null && !prop.isPending())) {
-        lastTick = now;
-        ticked = true;
-        if (prop != null) hasClocks = prop.toggleClocks();
-      }
-
-      if (doProp || doNudge)
-        try {
-          sim.firePropagationStarted(ticked); // FIXME: ack, wrong thread!
-          propagated = doProp;
-          final var p = sim.getPropagationListener();
-          final var evt = p == null ? null : new Event(sim, false, false, false);
-          stepPoints.clear();
-          if (prop != null) propagated |= prop.propagate(p, evt);
-        } catch (Exception err) {
-          oops = true;
-          err.printStackTrace();
-        }
-
-      if (doStep)
-        try {
-          stepped = true;
-          stepPoints.clear();
-          if (prop != null) prop.step(stepPoints);
-          if (prop == null || !prop.isPending()) propagated = true;
-        } catch (Exception err) {
-          oops = true;
-          err.printStackTrace();
-        }
-
-      osc = prop != null && prop.isOscillating();
-
-      var clockDied = false;
-      synchronized (this) {
-        this.oops = oops;
-        if (osc) {
-          autoPropagating = false;
-          nudgeRequested = false;
-        }
-        if (ticked && manualTicksRequested > 0) manualTicksRequested--;
-        if (autoTicking && !hasClocks) {
-          autoTicking = false;
-          clockDied = true;
-        }
-      }
-
-      // We report nudges, but we report them as no-ops, unless they were
-      // accompanied by a tick, step, or propagate. That allows for a repaint in
-      // some components.
-      if (ticked || stepped || propagated || doNudge)
-        sim.firePropagationCompleted(
-            ticked, stepped && !propagated, propagated); // FIXME: ack, wrong thread!
-      if (clockDied) sim.fireSimulatorStateChanged(); // FIXME: ack, wrong thread!
       return true;
     }
 

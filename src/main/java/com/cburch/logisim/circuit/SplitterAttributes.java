@@ -176,7 +176,7 @@ public class SplitterAttributes extends AbstractAttributeSet {
 
   public static final AttributeOption APPEAR_LEGACY = new AttributeOption("legacy", S.getter("splitterAppearanceLegacy"));
 
-  public static final Attribute<Integer> ATTR_SPACING = Attributes.forIntegerRange("spacing", S.getter("splitterSpacing"), 1, 9);
+  public static final Attribute<Integer> ATTR_SPACING = Attributes.forIntegerRange("spacing", S.getter("splitterSpacing"), 1, 19);
 
   public static final AttributeOption APPEAR_LEFT = new AttributeOption("left", S.getter("splitterAppearanceLeft"));
 

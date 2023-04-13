@@ -131,6 +131,8 @@ public class Propagator {
   /** The number of clock cycles to let pass before deciding that the circuit is oscillating. */
   private volatile int simLimit;
 
+  public volatile int asyncPropLimit;
+
   /**
    * On average, one out of every 2**simRandomShift propagations through a component is delayed one
    * step more than the component requests. This noise is intended to address some circuits that
@@ -266,10 +268,10 @@ public class Propagator {
   }
 
   public boolean propagate() {
-    return propagate(null, null);
+    return propagate(null, null) == 0;
   }
 
-  public boolean propagate(Simulator.Listener propListener, Simulator.Event propEvent) {
+  public int propagate(Simulator.Listener propListener, Simulator.Event propEvent) {
     oscPoints.clear();
     root.processDirtyPoints();
     root.processDirtyComponents();
@@ -277,7 +279,8 @@ public class Propagator {
     final var oscThreshold = simLimit;
     final var logThreshold = 3 * oscThreshold / 4;
     var iters = 0;
-    while (!toProcess.isEmpty()) {
+    asyncPropLimit = (oscThreshold/10);
+    while (!toProcess.isEmpty() && iters < asyncPropLimit) {
       if (iters > 0 && propListener != null)
         propListener.propagationInProgress(propEvent);
       iters++;
@@ -290,13 +293,15 @@ public class Propagator {
       } else {
         isOscillating = true;
         oscAdding = false;
-        return true;
+        return iters;
       }
+
+
     }
     isOscillating = false;
     oscAdding = false;
     oscPoints.clear();
-    return iters > 0;
+    return iters;
   }
 
   private SetData removeCause(CircuitState state, SetData head, Location loc, Component cause) {
@@ -351,11 +356,13 @@ public class Propagator {
       }
     }
     toProcess.add(new SetData(clock + delay, setDataSerialNumber, state, pt, cause, val));
-    /*
-     * DEBUGGING - comment out Simulator.log(clock + ": set " + pt + " in "
-     * + state + " to " + val + " by " + cause + " after " + delay); //
-     */
 
+/*
+if(val.isErrorValue() || val.isUnknown()) {
+  System.out.println(clock + ": set " + pt + " in "
+          + state + " to " + val + " by " + cause + " after " + delay); //
+}
+*/
     setDataSerialNumber++;
   }
 

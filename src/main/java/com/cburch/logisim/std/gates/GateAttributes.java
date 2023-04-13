@@ -41,7 +41,7 @@ public class GateAttributes extends AbstractAttributeSet {
       Attributes.forIntegerRange("inputs", S.getter("gateInputsAttr"), 2, MAX_INPUTS);
 
   static final AttributeOption XOR_ONE = new AttributeOption("1", S.getter("xorBehaviorOne"));
-  static final AttributeOption XOR_ODD = new AttributeOption("odd", S.getter("xorBehaviorOdd"));
+  static final AttributeOption XOR_ODD = new AttributeOption("odd", S.getter("xorBehaviorOdd")) ;
   public static final Attribute<AttributeOption> ATTR_XOR =
       Attributes.forOption(
           "xor", S.getter("xorBehaviorAttr"), new AttributeOption[] {XOR_ONE, XOR_ODD});
